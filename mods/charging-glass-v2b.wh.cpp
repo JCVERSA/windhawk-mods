@@ -440,7 +440,7 @@ DWORD WINAPI OverlayThreadProc(void*) {
             glowStops[1].position = 1.0f;
             glowStops[1].color = withAlpha(glow, 0.0f);
             ComPtr<ID2D1GradientStopCollection> glowCol;
-            if (SUCCEEDED(factory->CreateGradientStopCollection(glowStops, 2, D2D1_GAMMA_2_2,
+            if (SUCCEEDED(target->CreateGradientStopCollection(glowStops, 2, D2D1_GAMMA_2_2,
                                                                 D2D1_EXTEND_MODE_CLAMP,
                                                                 &glowCol)) &&
                 glowCol) {
@@ -470,7 +470,7 @@ DWORD WINAPI OverlayThreadProc(void*) {
             rimStops[1].position = 1.0f;
             rimStops[1].color = withAlpha(D2D1::ColorF(1, 1, 1, 1), 0.07f * alpha);
             ComPtr<ID2D1GradientStopCollection> rimCol;
-            if (SUCCEEDED(factory->CreateGradientStopCollection(rimStops, 2, D2D1_GAMMA_2_2,
+            if (SUCCEEDED(target->CreateGradientStopCollection(rimStops, 2, D2D1_GAMMA_2_2,
                                                                 D2D1_EXTEND_MODE_CLAMP, &rimCol)) &&
                 rimCol) {
                 ComPtr<ID2D1LinearGradientBrush> rim;
@@ -484,9 +484,10 @@ DWORD WINAPI OverlayThreadProc(void*) {
             }
 
             // Top sheen, clipped to the disc.
-            ComPtr<ID2D1Geometry> disc;
+            ComPtr<ID2D1EllipseGeometry> disc;
             ComPtr<ID2D1Layer> sheenLayer;
-            if (SUCCEEDED(factory->CreateEllipseGeometry(D2D1::Ellipse(c, R, R), &disc)) && disc &&
+            const D2D1_ELLIPSE discEllipse = D2D1::Ellipse(c, R, R);
+            if (SUCCEEDED(factory->CreateEllipseGeometry(&discEllipse, &disc)) && disc &&
                 SUCCEEDED(target->CreateLayer(&sheenLayer)) && sheenLayer) {
                 D2D1_RECT_F discRect = D2D1::RectF(c.x - R, c.y - R, c.x + R, c.y + R);
                 target->PushLayer(
@@ -500,7 +501,7 @@ DWORD WINAPI OverlayThreadProc(void*) {
                 sheenStops[2].position = 1.0f;
                 sheenStops[2].color = withAlpha(D2D1::ColorF(1, 1, 1, 1), 0.0f);
                 ComPtr<ID2D1GradientStopCollection> sheenCol;
-                if (SUCCEEDED(factory->CreateGradientStopCollection(
+                if (SUCCEEDED(target->CreateGradientStopCollection(
                         sheenStops, 3, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &sheenCol)) &&
                     sheenCol) {
                     ComPtr<ID2D1LinearGradientBrush> sheen;
