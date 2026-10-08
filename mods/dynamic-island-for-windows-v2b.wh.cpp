@@ -2,7 +2,7 @@
 // @id              dynamic-island-for-windows-v2b
 // @name            Dynamic Island for Windows v2B
 // @description     Community v2B build of Dynamic Island for Windows: fixes stuck mic/camera privacy dots, stops pointless repaints, adds click-through modes, and coexists safely with the original mod.
-// @version         2.0.0
+// @version         2.1.0
 // @author          JCVERSA
 // @github          https://github.com/JCVERSA
 // @include         windhawk.exe
@@ -30,7 +30,23 @@ A fluid, living overlay inspired by Apple's Dynamic Island, bringing a beautiful
 
 ---
 
-## ✨ What's new in v2B (2.0.0)
+## ✨ What's new in v2B
+
+### 2.1.0
+
+| Area | Change |
+|---|---|
+| **Weather reliability** (windhawk-mods #5997) | Weather requests now check the HTTP status code, follow redirects, use bounded timeouts, and fall back through automatic-proxy and browser-user-agent attempts instead of silently parsing an error page as "no data". Failures are logged with their status for easier diagnosis. |
+| **Fullscreen-exit animation** (windhawk-mods #5910) | When a fullscreen app closes, the island now grows back in with its normal spring animation instead of popping to full size instantly. Hovering the hidden island's spot during fullscreen no longer causes show/hide flicker. |
+| **Hover debounce** | New **Hover expand delay** setting: the island only expands after the pointer has stayed over it for the chosen number of milliseconds, preventing accidental expansion when the cursor sweeps across the top of the screen. |
+| **Click-mode hover feedback** | With Expand-on-hover off, hovering the collapsed island now gives a subtle scale feedback so it is clear the island is there to be clicked (issue devcode90#100). |
+| **Auto-expand duration** | New **Auto-expand duration** setting controls how long the island stays expanded after a track change (previously a fixed 5 seconds). |
+| **Calendar first day** | New **Calendar first day** setting: Sunday (default), Monday, or follow the Windows regional format (issue devcode90#92). |
+| **Date in the pill** | New **Show date next to clock** setting puts today's date beside the time in the collapsed pill (issue devcode90#88). |
+| **Hide on maximized** | New **Hide on maximized windows** option extends the fullscreen auto-hide behavior to maximized windows. |
+| **Coexistence warning** | If the original Dynamic Island mod is enabled at the same time, v2B now logs a warning so the duplicate-island situation is easier to spot. |
+
+### 2.0.0
 
 | Area | Change |
 |---|---|
@@ -167,9 +183,15 @@ and on the [windhawk-mods issue tracker](https://github.com/ramensoftware/windha
   - AutoHideFullscreen: true
     $name: Hide on full screen
     $description: Automatically hide the island when playing a video or app in full screen mode.
+  - AutoHideMaximized: false
+    $name: Hide on maximized windows
+    $description: Also hide the island while the foreground window is maximized, not only in true fullscreen. Useful when a maximized browser or editor covers the top of the screen.
   - UnhideOnHover: true
     $name: Unhide on hover
     $description: Allow the hidden island to reappear when you hover your mouse over it.
+  - HoverExpandDelayMs: 0
+    $name: Hover expand delay (ms)
+    $description: How long the pointer must rest over the island before it expands on hover. 0 expands immediately (original behavior). Try 100 to 200 if the island expands accidentally while moving the cursor across the top of the screen.
   - ClickThroughAlways: false
     $name: Click-through (always)
     $description: Mouse clicks always pass through the island to the window underneath. The island can no longer be hovered, dragged or clicked while this is on. Useful for streaming overlays or keeping it visible above games.
@@ -271,9 +293,19 @@ and on the [windhawk-mods issue tracker](https://github.com/ramensoftware/windha
     $options:
       - red: Default Red
       - system: System (Device Accent)
+  - FirstDayOfWeek: sunday
+    $name: Calendar first day of week
+    $description: Which day starts the week in the calendar view. System follows your Windows regional settings.
+    $options:
+      - sunday: Sunday
+      - monday: Monday
+      - system: System (Windows regional setting)
   - ClockAccentGlow: true
     $name: Show clock background circle/glow
     $description: Display the soft accent circle/glow behind the time in the expanded clock view. Turn off for a clean, minimal clock without background glow.
+  - CollapsedShowDate: false
+    $name: Show date next to clock in the pill
+    $description: Displays today's date beside the time in the collapsed island. The pill widens automatically to fit it.
   - FontFamily: ""
     $name: Font family
     $description: Custom font family for island text (e.g. Segoe UI, Arial, Aptos, Consolas). Leave empty for system default.
@@ -324,6 +356,9 @@ and on the [windhawk-mods issue tracker](https://github.com/ramensoftware/windha
   - MediaAutoExpand: false
     $name: Auto-expand on track change
     $description: Automatically expand the island when a new song or video starts playing. If disabled, album art updates smoothly in the collapsed pill without unprompted expansion.
+  - MediaAutoExpandSeconds: 5
+    $name: Auto-expand duration (seconds)
+    $description: How long the island stays expanded after a track change before collapsing again. 1 to 30 seconds.
   - Volume: true
     $name: Volume slider flyout
     $description: Shows a volume slider banner on the island when adjusting system volume. Disable if you prefer the default Windows volume flyout.
@@ -920,12 +955,15 @@ struct Settings {
     float animationSpeed = 1.0f;
     bool media = true;
     bool mediaAutoExpand = false;
+    int mediaAutoExpandSeconds = 5;  // v2B: was hardcoded to 5 s
     bool clipboard = true;
     bool statusCountdownProgress = false;
     bool battery = true;
     bool progress = true;
     bool volume = true;
     CalendarAccentMode calendarAccent = CalendarAccentMode::Red;
+    int calendarFirstDay = 0;  // v2B: 0 = Sunday (original), 1 = Monday; resolved from "system" at load time
+    bool collapsedShowDate = false;  // v2B: date beside the clock in the collapsed pill
     bool privacyDots = true;
     bool privacyDotsMic = true;
     bool privacyDotsCam = true;
@@ -958,8 +996,10 @@ struct Settings {
     bool weatherFahrenheit = false;
     int autoHideIdleSeconds = 0;
     bool autoHideFullscreen = true;
+    bool autoHideMaximized = false;  // v2B: also suppress on maximized foreground windows
     bool borderMergedMode = false;
     bool unhideOnHover = true;
+    int hoverExpandDelayMs = 0;  // v2B: pointer must dwell this long before hover-expand
     bool alwaysOnTop = true;
     bool expandOnHover = true;
     bool clickThroughAlways = false;
@@ -1286,6 +1326,11 @@ bool g_hotkeyRegistered = false;
 
 // --- Zero-CPU parking for idle/fullscreen auto-hide (mirrors g_manuallyHidden) ---
 std::atomic<bool> g_autoHiddenParked = false;          // true while OS-hidden due to idle/fullscreen auto-hide
+// v2B (windhawk-mods#5910): why the island is parked, so the mouse-wake hook
+// can refuse to re-show it just because the cursor crossed the (invisible)
+// island spot while a fullscreen app is running. Without this, hovering that
+// spot woke -> revealed -> re-suppressed -> re-parked every pass: flicker.
+std::atomic<bool> g_parkedForFullscreen = false;
 std::atomic<bool> g_fullscreenOverrideVisible = false; // user forced the island visible via hotkey while fullscreen
 std::atomic<bool> g_isFullscreen = false;              // cached fullscreen state, shared with the hotkey handler
 std::atomic<double> g_hotkeyUnhideUntil = 0.0;         // grace deadline to keep island visible after hotkey / settings unhide
@@ -1933,6 +1978,27 @@ bool IsForegroundFullscreen(HWND targetHwnd) {
     return false;
 }
 
+// v2B: same guards as IsForegroundFullscreen, but for maximized windows, so
+// the optional "Hide on maximized windows" behavior never triggers on the
+// desktop, the taskbar, or our own window.
+bool IsForegroundMaximized(HWND targetHwnd) {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == targetHwnd || fg == GetDesktopWindow() || fg == GetShellWindow()) {
+        return false;
+    }
+
+    if (!IsWindowVisible(fg)) return false;
+
+    wchar_t className[256] = {};
+    GetClassNameW(fg, className, 256);
+    if (wcscmp(className, L"WorkerW") == 0 || wcscmp(className, L"Progman") == 0 ||
+        wcscmp(className, L"Shell_TrayWnd") == 0) {
+        return false;
+    }
+
+    return IsZoomed(fg) != FALSE;
+}
+
 // Returns the DPI scale factor for the primary monitor (1.0 = 96 DPI = 100%)
 float GetPrimaryMonitorDpiScale() {
     POINT pt = {0, 0};
@@ -2051,6 +2117,20 @@ void LoadSettings() {
         next.calendarAccent = CalendarAccentMode::Red;
     }
 
+    // v2B (devcode90#92): configurable first day of week. Default stays Sunday
+    // so the original layout is unchanged; "system" mirrors the Windows
+    // regional setting (LOCALE_IFIRSTDAYOFWEEK: 0 = Monday, 1 = Sunday).
+    const std::wstring firstDay = GetStringSettingCopy(L"Themes.FirstDayOfWeek");
+    if (EqualsNoCase(firstDay, L"monday")) {
+        next.calendarFirstDay = 1;
+    } else if (EqualsNoCase(firstDay, L"system")) {
+        wchar_t fdow[8] = {};
+        if (GetLocaleInfoExW(LOCALE_NAME_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK, fdow, ARRAYSIZE(fdow)) > 0) {
+            next.calendarFirstDay = (fdow[0] == L'0') ? 1 : 0;
+        }
+    }
+    next.collapsedShowDate = Wh_GetIntSetting(L"Themes.CollapsedShowDate") != 0;
+
     const std::wstring fpsStr = GetStringSettingWithFallback(L"Animations.TargetFPS", L"Appearance.TargetFPS");
     if (EqualsNoCase(fpsStr, L"auto") || fpsStr.empty()) {
         next.targetFps = 0;
@@ -2087,6 +2167,7 @@ void LoadSettings() {
 
     next.media = Wh_GetIntSetting(L"Modules.Media") != 0;
     next.mediaAutoExpand = Wh_GetIntSetting(L"Modules.MediaAutoExpand") != 0;
+    next.mediaAutoExpandSeconds = ClampInt(Wh_GetIntSetting(L"Modules.MediaAutoExpandSeconds"), 1, 30);
     next.volume = Wh_GetIntSetting(L"Modules.Volume") != 0;
     if (!next.volume) {
         std::lock_guard lock(g_stateMutex);
@@ -2220,6 +2301,7 @@ void LoadSettings() {
     const std::wstring hideSec = GetStringSettingWithFallback(L"Behavior.AutoHideIdleSeconds", L"Appearance.AutoHideIdleSeconds");
     next.autoHideIdleSeconds = hideSec.empty() ? 0 : _wtoi(hideSec.c_str());
     next.unhideOnHover = Wh_GetIntSetting(L"Behavior.UnhideOnHover") != 0;
+    next.hoverExpandDelayMs = ClampInt(Wh_GetIntSetting(L"Behavior.HoverExpandDelayMs"), 0, 2000);
     next.alwaysOnTop = Wh_GetIntSetting(L"Behavior.AlwaysOnTop") != 0;
     const int localExpandOnHover = Wh_GetIntValue(L"ExpandOnHoverOverride", -1);
     next.expandOnHover = localExpandOnHover >= 0 ? (localExpandOnHover != 0) : (Wh_GetIntSetting(L"Behavior.ExpandOnHover") != 0);
@@ -2378,6 +2460,7 @@ void LoadSettings() {
 
     next.borderMergedMode = Wh_GetIntSetting(L"Appearance.BorderMergedMode") != 0;
     next.autoHideFullscreen = Wh_GetIntSetting(L"Behavior.AutoHideFullscreen") != 0;
+    next.autoHideMaximized = Wh_GetIntSetting(L"Behavior.AutoHideMaximized") != 0;
     next.clickThroughAlways = Wh_GetIntSetting(L"Behavior.ClickThroughAlways") != 0;
     next.clickThroughFullscreen = Wh_GetIntSetting(L"Behavior.ClickThroughFullscreen") != 0;
     next.hardwareMonitorModule = Wh_GetIntSetting(L"Modules.HardwareMonitorModule") != 0;
@@ -3700,6 +3783,9 @@ void TriggerNudge() {
     // of the normal throttle, or it'd never be seen until the next hook/
     // hotkey/fullscreen-recheck wake.
     const bool wasParked = g_autoHiddenParked.exchange(false, std::memory_order_relaxed);
+    if (wasParked) {
+        g_parkedForFullscreen.store(false, std::memory_order_relaxed);
+    }
     const double now = NowSeconds();
     const double previous = g_lastNudgeTime.load();
     if (!wasParked && now - previous < 0.45) {
@@ -4839,33 +4925,71 @@ void PushAudioChunks(BYTE* data, UINT32 frames, WAVEFORMATEX* format) {
 }
 
 // --- Weather Fetching Helpers ---
-std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true) {
+//
+// v2B rework (windhawk-mods#5997: weather blank while wttr.in is reachable):
+// - The HTTP status code is now checked. Error pages (403/429/5xx challenge or
+//   rate-limit HTML) are no longer fed to the JSON parser as if they were data;
+//   they count as a failure so the retry/backoff logic reacts to them.
+// - Redirects are followed automatically.
+// - Bounded timeouts keep a dead proxy or server from stalling the thread.
+// - On failure the request is retried with an automatic-proxy configuration and
+//   then with a common browser user agent. WinHTTP's proxy configuration is
+//   resolved independently of the browser/.NET stacks, which is exactly the
+//   "works in PowerShell, fails in the mod" case from the report.
+// The UA ladder stays last-resort: most requests succeed on the first attempt.
+constexpr wchar_t kIslandUserAgent[] = L"DynamicIslandV2B/1.0";
+constexpr wchar_t kBrowserUserAgent[] =
+    L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+
+std::string HttpGetOnce(const wchar_t* host, const wchar_t* path, bool https,
+                        DWORD accessType, const wchar_t* userAgent, DWORD* outStatus) {
     std::string response;
-    HINTERNET hSession = WinHttpOpen(L"DynamicIslandV2B/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (outStatus) *outStatus = 0;
+
+    HINTERNET hSession = WinHttpOpen(userAgent, accessType, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
         Wh_Log(L"Weather HttpGet: WinHttpOpen failed with error %lu", GetLastError());
         return response;
     }
+    // Bounded so one dead attempt cannot stall the weather thread for a minute.
+    WinHttpSetTimeouts(hSession, 5000, 10000, 15000, 20000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
     if (hConnect) {
         HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
         if (hRequest) {
+#ifdef WINHTTP_OPTION_REDIRECT_POLICY
+            DWORD redirectPolicy = WINHTTP_REDIRECT_POLICY_ALWAYS;
+            WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+#endif
             if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
                 WinHttpReceiveResponse(hRequest, nullptr)) {
-                DWORD size = 0;
-                DWORD downloaded = 0;
-                do {
-                    if (WinHttpQueryDataAvailable(hRequest, &size) && size > 0) {
+                DWORD status = 0;
+                DWORD statusSize = sizeof(status);
+                if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                        WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX)) {
+                    if (outStatus) *outStatus = status;
+                }
+                if (status >= 200 && status < 300) {
+                    DWORD size = 0;
+                    DWORD downloaded = 0;
+                    for (;;) {
+                        if (!WinHttpQueryDataAvailable(hRequest, &size)) {
+                            break;
+                        }
+                        if (size == 0) {
+                            break;
+                        }
                         std::vector<char> buffer(size + 1);
                         if (WinHttpReadData(hRequest, buffer.data(), size, &downloaded)) {
                             buffer[downloaded] = '\0';
                             response.append(buffer.data());
                         } else {
                             Wh_Log(L"Weather HttpGet: WinHttpReadData failed with error %lu", GetLastError());
+                            break;
                         }
                     }
-                } while (size > 0);
+                }
             } else {
                 Wh_Log(L"Weather HttpGet: WinHttpSendRequest/ReceiveResponse failed with error %lu", GetLastError());
             }
@@ -4879,6 +5003,32 @@ std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true)
     }
     WinHttpCloseHandle(hSession);
     return response;
+}
+
+std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true) {
+    struct Attempt {
+        DWORD accessType;
+        const wchar_t* userAgent;
+        const wchar_t* label;
+    };
+    const Attempt attempts[] = {
+        {WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, kIslandUserAgent, L"default-proxy"},
+#ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+        {WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, kIslandUserAgent, L"automatic-proxy"},
+#endif
+        {WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, kBrowserUserAgent, L"browser-UA"},
+    };
+
+    for (const Attempt& attempt : attempts) {
+        DWORD status = 0;
+        std::string response = HttpGetOnce(host, path, https, attempt.accessType, attempt.userAgent, &status);
+        if (!response.empty()) {
+            return response;
+        }
+        Wh_Log(L"Weather HttpGet: attempt (%s) produced no usable response (HTTP status %lu)",
+               attempt.label, status);
+    }
+    return std::string();
 }
 
 // Percent-encodes a city name for use as a wttr.in path segment. Only spaces
@@ -6802,7 +6952,14 @@ class Renderer {
 
         const bool gameMetricsPresent = primary.kind == IslandKind::Idle &&
             (settings.gameOverlay || Wh_GetIntValue(L"GameOverlayPinned", 0) != 0);
-        const float hoverScale = (settings.expandOnHover && ((hover && !gameMetricsPresent) || pinned)) ? 1.025f : 1.0f;
+        // v2B (issue devcode90#100): in click-to-expand mode hover used to give
+        // no feedback at all, so the island felt dead before the click. A small,
+        // deliberately weaker scale still signals "this is interactive" without
+        // implying the click-through-free expansion of hover mode.
+        const float hoverScale =
+            ((hover && !gameMetricsPresent) || pinned)
+                ? (settings.expandOnHover || pinned ? 1.025f : 1.012f)
+                : 1.0f;
         const float scale = hoverScale;
 
         const float top = (settings.notchStyle || settings.borderMergedMode) ? std::max(0.0f, nudge) : (kRenderPadY + nudge);
@@ -6924,8 +7081,18 @@ class Renderer {
 
         SYSTEMTIME local = {};
         GetLocalTime(&local);
-        const std::wstring clock = FormatIslandTime(local, settings.clockFollowSystem,
-                                                    settings.use24HourClock, settings.showSeconds);
+        std::wstring clock = FormatIslandTime(local, settings.clockFollowSystem,
+                                              settings.use24HourClock, settings.showSeconds);
+        // v2B (devcode90#88): optionally trail today's date after the time.
+        // Measuring and drawing use the very same string, so the pill widens
+        // by exactly what the date needs — no second slot, no layout fork.
+        if (settings.collapsedShowDate) {
+            const std::wstring shortDate = FormatIslandDate(local, std::wstring(), L"d MMM");
+            if (!shortDate.empty()) {
+                clock += L"  ";
+                clock += shortDate;
+            }
+        }
         metrics.clockWidth =
             MeasureTextWidthCached(WidestDigitForm(clock), fmt, idleClockWidthCache_);
 
@@ -7964,9 +8131,18 @@ class Renderer {
         const float gridTop = rect.top + 16.0f * scale;
         const float colW = 28.0f * scale;
         const float headerH = 18.0f * scale;
-        const wchar_t* days[] = {L"S", L"M", L"T", L"W", L"T", L"F", L"S"};
+        // v2B (devcode90#92): the week start is configurable. All grid math
+        // works on Sunday-first column indices, so a Monday-first week simply
+        // rotates the first-day offset and the header/weekend columns.
+        const bool mondayFirst = settings.calendarFirstDay == 1;
+        static const wchar_t* const kDaysSundayFirst[] = {L"S", L"M", L"T", L"W", L"T", L"F", L"S"};
+        static const wchar_t* const kDaysMondayFirst[] = {L"M", L"T", L"W", L"T", L"F", L"S", L"S"};
+        const wchar_t* const* days = mondayFirst ? kDaysMondayFirst : kDaysSundayFirst;
 
-        const int startDayIdx = GetDayOfWeek(local.wYear, local.wMonth, 1);
+        int startDayIdx = GetDayOfWeek(local.wYear, local.wMonth, 1);
+        if (mondayFirst) {
+            startDayIdx = (startDayIdx + 6) % 7;
+        }
         const int monthDays = GetDaysInMonth(local.wYear, local.wMonth);
         const int rowCount = (startDayIdx + monthDays + 6) / 7;  // 5 or 6
 
@@ -8023,7 +8199,7 @@ class Renderer {
                 textBrush_->SetOpacity(1.0f);
                 target_->DrawTextW(dayText.c_str(), static_cast<UINT32>(dayText.size()), gridFmt,
                                    cell, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-            } else if (col == 0 || col == 6) {
+            } else if (mondayFirst ? (col == 5 || col == 6) : (col == 0 || col == 6)) {
                 // Weekends recede instead of taking the accent, leaving today as
                 // the only accented thing in the grid.
                 mutedBrush_->SetOpacity(0.62f);
@@ -9006,9 +9182,18 @@ class Renderer {
 
         SYSTEMTIME local = {};
         GetLocalTime(&local);
-        const std::wstring collapsedTime = FormatIslandTime(local, settings.clockFollowSystem,
-                                                            settings.use24HourClock,
-                                                            settings.showSeconds);
+        std::wstring collapsedTime = FormatIslandTime(local, settings.clockFollowSystem,
+                                                      settings.use24HourClock,
+                                                      settings.showSeconds);
+        // v2B (devcode90#88): same clock+date concatenation MeasureIdleStrip
+        // measures, so the drawn string always fits its reserved slot.
+        if (settings.collapsedShowDate) {
+            const std::wstring shortDate = FormatIslandDate(local, std::wstring(), L"d MMM");
+            if (!shortDate.empty()) {
+                collapsedTime += L"  ";
+                collapsedTime += shortDate;
+            }
+        }
         const wchar_t* timeBuf = collapsedTime.c_str();
 
         const float scale = 1.0f;
@@ -11126,7 +11311,11 @@ std::atomic<int64_t> g_lastMouseWakeCheckMs = 0;
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && wParam == WM_MOUSEMOVE &&
         g_settings.unhideOnHover &&
-        g_autoHiddenParked.load(std::memory_order_relaxed)) {
+        g_autoHiddenParked.load(std::memory_order_relaxed) &&
+        // v2B (windhawk-mods#5910): never wake for hover while parked because
+        // of a fullscreen/maximized app — the island would appear and
+        // immediately re-hide, flickering under the cursor.
+        !g_parkedForFullscreen.load(std::memory_order_relaxed)) {
         const int64_t nowMs = static_cast<int64_t>(GetTickCount64());
         const int64_t last = g_lastMouseWakeCheckMs.load(std::memory_order_relaxed);
         if (nowMs - last >= 60) {  // ~16Hz check rate for responsive unhide
@@ -11965,6 +12154,7 @@ DWORD WINAPI RenderThreadProc(void*) {
             // leave g_autoHiddenParked stale-true and the window stuck
             // hidden.
             g_autoHiddenParked = false;
+            g_parkedForFullscreen = false;
             wasAutoHiddenParked = false;
 
             if (!wasManuallyHidden) {
@@ -12006,14 +12196,20 @@ DWORD WINAPI RenderThreadProc(void*) {
                 setHighResTimer(false);
                 if (parkedForFullscreen) {
                     MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, 1500, QS_ALLINPUT);
+                    // v2B: "fullscreen" suppression covers maximized windows
+                    // too when AutoHideMaximized is on; both share the same
+                    // park/unpark and hotkey-override machinery.
                     const bool stillFullscreen =
-                        g_settings.autoHideFullscreen && IsForegroundFullscreen(hwnd);
+                        (g_settings.autoHideFullscreen && IsForegroundFullscreen(hwnd)) ||
+                        (g_settings.autoHideMaximized && IsForegroundMaximized(hwnd));
                     g_isFullscreen.store(stillFullscreen, std::memory_order_relaxed);
                     if (!stillFullscreen) {
                         g_fullscreenOverrideVisible = false;
                         g_autoHiddenParked = false;
+                        g_parkedForFullscreen = false;
                     } else if (g_fullscreenOverrideVisible.load()) {
                         g_autoHiddenParked = false;
+                        g_parkedForFullscreen = false;
                     }
                 } else {
                     MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, INFINITE, QS_ALLINPUT);
@@ -12043,6 +12239,7 @@ DWORD WINAPI RenderThreadProc(void*) {
             // frame's normal logic decide whether to actually stay visible
             // or immediately re-collapse and re-park.
             wasAutoHiddenParked = false;
+            g_parkedForFullscreen = false;
             justUnhidden = true;
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             lastInteractionTime = NowSeconds();
@@ -12149,6 +12346,27 @@ DWORD WINAPI RenderThreadProc(void*) {
             hover = PtInRect(&dockRect, cursor) != FALSE;
         }
 
+        // v2B (issue devcode90#100 family): optional hover debounce. Only the
+        // expansion is delayed — unhiding, media-button hover states and
+        // dragging keep the raw hover value so nothing feels laggy. Click-to-
+        // expand mode also keeps the raw value: a deliberate click already
+        // proves intent, no dwell needed.
+        bool hoverForExpand = hover;
+        if (g_settings.hoverExpandDelayMs > 0) {
+            static bool hoverDwelling = false;
+            static double hoverDwellStart = 0.0;
+            if (hover) {
+                if (!hoverDwelling) {
+                    hoverDwelling = true;
+                    hoverDwellStart = now;
+                }
+                hoverForExpand = (now - hoverDwellStart) * 1000.0 >=
+                                 static_cast<double>(g_settings.hoverExpandDelayMs);
+            } else {
+                hoverDwelling = false;
+            }
+        }
+
         bool needsRender = false;
 
         if (!hover && g_clickExpanded.load()) {
@@ -12161,16 +12379,17 @@ DWORD WINAPI RenderThreadProc(void*) {
         }
         // Fixes windhawk-mods#4738: active playback used to count as a continuous
         // event, so the island stayed visible for as long as anything was playing
-        // and kept resetting the auto-hide timer. Only the 5s window after a
-        // *title* change is transient now, so the pill behaves like the clipboard
-        // and battery alerts -- it surfaces, then hides again while playback
-        // continues in the background.
+        // and kept resetting the auto-hide timer. Only the configurable window
+        // (v2B, was fixed at 5 s) after a *title* change is transient now, so the
+        // pill behaves like the clipboard and battery alerts -- it surfaces, then
+        // hides again while playback continues in the background.
         const bool recentTrackChange = g_settings.mediaAutoExpand &&
                                        !MediaExpandBlocked(snapshot.media) &&
                                        primary.kind == IslandKind::Media &&
                                        snapshot.media.playing &&
                                        !snapshot.media.title.empty() &&
-                                       (now - snapshot.media.titleChangedAt < 5.0);
+                                       (now - snapshot.media.titleChangedAt <
+                                        static_cast<double>(g_settings.mediaAutoExpandSeconds));
 
         bool isTransientAlert = (primary.kind == IslandKind::Clipboard ||
                                  primary.kind == IslandKind::Notification ||
@@ -12194,7 +12413,7 @@ DWORD WINAPI RenderThreadProc(void*) {
             }
         }
 
-        bool isHoverExpanded = g_settings.expandOnHover ? hover : (hover && g_clickExpanded.load());
+        bool isHoverExpanded = g_settings.expandOnHover ? hoverForExpand : (hover && g_clickExpanded.load());
         const bool gameMetricsPresent = primary.kind == IslandKind::Idle &&
             (g_settings.gameOverlay || Wh_GetIntValue(L"GameOverlayPinned", 0) != 0);
         if (gameMetricsPresent) {
@@ -12223,7 +12442,9 @@ DWORD WINAPI RenderThreadProc(void*) {
         static bool isFullscreen = false;
         static double lastFullscreenCheck = -1.0;  // -1.0 guarantees the very first iteration checks
         if (now - lastFullscreenCheck > 0.5) {
-            const bool newFullscreen = g_settings.autoHideFullscreen && IsForegroundFullscreen(hwnd);
+            const bool newFullscreen =
+                (g_settings.autoHideFullscreen && IsForegroundFullscreen(hwnd)) ||
+                (g_settings.autoHideMaximized && IsForegroundMaximized(hwnd));
             if (isFullscreen && !newFullscreen) {
                 // Fullscreen ended — re-arm so the next fullscreen session
                 // hides again even if the hotkey was used to reveal the
@@ -12335,7 +12556,22 @@ DWORD WINAPI RenderThreadProc(void*) {
         widthSpring.target = targetWidth;
         heightSpring.target = targetHeight;
 
-        if (justUnhidden || (unhideGraceActive && widthSpring.value < 0.5f && targetWidth > 1.0f)) {
+        if (justUnhidden) {
+            // v2B (windhawk-mods#5910): auto-hide and fullscreen parks always
+            // collapse the springs to ~0 before the window is hidden, so on
+            // unpark the springs are already at the right starting point and
+            // the island should animate back in instead of snapping to full
+            // size. Snapping is only kept for stale mid-flight values, e.g.
+            // a manual-hide that happened while the island was still large.
+            const bool settledAtZero =
+                widthSpring.value < 0.5f && heightSpring.value < 0.5f &&
+                std::fabs(widthSpring.velocity) < 0.5f && std::fabs(heightSpring.velocity) < 0.5f;
+            if (!settledAtZero) {
+                widthSpring.Reset(targetWidth);
+                heightSpring.Reset(targetHeight);
+                nudgeSpring.Reset(0.0f);
+            }
+        } else if (unhideGraceActive && widthSpring.value < 0.5f && targetWidth > 1.0f) {
             widthSpring.Reset(targetWidth);
             heightSpring.Reset(targetHeight);
             nudgeSpring.Reset(0.0f);
@@ -12670,6 +12906,7 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         if (wantsAutoHiddenPark) {
             parkedForFullscreen = fullscreenSuppressed;
+            g_parkedForFullscreen.store(parkedForFullscreen, std::memory_order_relaxed);
             wasAutoHiddenParked = true;
             g_autoHiddenParked = true;
             ShowWindow(hwnd, SW_HIDE);
@@ -12856,6 +13093,17 @@ BOOL WhTool_ModInit() {
 
     g_layoutDirty = true;
     Wh_Log(L"Dynamic Island for Windows v2B initialized.");
+
+    // v2B coexistence aid: both mods can be enabled at the same time because
+    // they are separate Windhawk mods, and the result is two islands on
+    // screen. Detect the original mod's window (its window class is the only
+    // stable identifier) and make the situation visible in the log instead of
+    // leaving users to wonder why they have a duplicate island.
+    if (FindWindowW(L"Windhawk.DynamicIslandForWindows", nullptr)) {
+        Wh_Log(L"Dynamic Island v2B: the original Dynamic Island for Windows "
+               L"mod appears to be enabled at the same time. Two islands will "
+               L"be shown; disable one of the two mods.");
+    }
     return TRUE;
 }
 
