@@ -6,6 +6,7 @@
 // @author          JCVERSA
 // @github          https://github.com/JCVERSA
 // @license         MIT
+// @compilerOptions -lole32 -ld2d1 -ldwrite -lgdi32 -luser32
 // @include         windhawk.exe
 // ==/WindhawkMod==
 
