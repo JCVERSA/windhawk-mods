@@ -2156,7 +2156,8 @@ void LoadSettings() {
         next.calendarFirstDay = 1;
     } else if (EqualsNoCase(firstDay, L"system")) {
         wchar_t fdow[8] = {};
-        if (GetLocaleInfoExW(LOCALE_NAME_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK, fdow, ARRAYSIZE(fdow)) > 0) {
+        // Note: GetLocaleInfoEx is a W-only API (no A/W suffix in the name).
+        if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK, fdow, ARRAYSIZE(fdow)) > 0) {
             next.calendarFirstDay = (fdow[0] == L'0') ? 1 : 0;
         }
     }
@@ -4977,6 +4978,14 @@ void PushAudioChunks(BYTE* data, UINT32 frames, WAVEFORMATEX* format) {
 //   resolved independently of the browser/.NET stacks, which is exactly the
 //   "works in PowerShell, fails in the mod" case from the report.
 // The UA ladder stays last-resort: most requests succeed on the first attempt.
+//
+// The MinGW headers Windhawk compiles against declare WINHTTP_OPTION_REDIRECT_POLICY
+// but not the policy value constants, so provide them when missing.
+#ifndef WINHTTP_REDIRECT_POLICY_NEVER
+#define WINHTTP_REDIRECT_POLICY_NEVER 0
+#define WINHTTP_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP 1
+#define WINHTTP_REDIRECT_POLICY_ALWAYS 2
+#endif
 constexpr wchar_t kIslandUserAgent[] = L"DynamicIslandV2B/1.0";
 constexpr wchar_t kBrowserUserAgent[] =
     L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
