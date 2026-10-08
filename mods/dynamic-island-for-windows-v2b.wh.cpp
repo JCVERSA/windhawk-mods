@@ -2,7 +2,7 @@
 // @id              dynamic-island-for-windows-v2b
 // @name            Dynamic Island for Windows v2B
 // @description     Community v2B build of Dynamic Island for Windows: fixes stuck mic/camera privacy dots, stops pointless repaints, adds click-through modes, and coexists safely with the original mod.
-// @version         2.1.0
+// @version         2.2.0
 // @author          JCVERSA
 // @github          https://github.com/JCVERSA
 // @include         windhawk.exe
@@ -31,6 +31,18 @@ A fluid, living overlay inspired by Apple's Dynamic Island, bringing a beautiful
 ---
 
 ## ✨ What's new in v2B
+
+### 2.2.0 — Liquid Glass & iPhone-style motion
+
+| Area | Change |
+|---|---|
+| **Liquid Glass surface (new default)** | The island is now translucent with a light-catching specular edge and a soft top sheen, in the spirit of Apple's glass materials. Real transparency to the desktop via the layered window — no blur required. The original opaque matte look stays one setting away (**Surface style: Flat**), and **Glass specular intensity** dials the lighting from 0 to 200. |
+| **Squash & stretch** | Pressing the island squishes it like a physical object (shorter and a touch wider, volume preserved) and it springs back on release. Feedback starts on pointer-down, the way Apple's fluid-interfaces guidance prescribes. |
+| **Expand choreography** | When the island grows, the shape leads and the content fades in a beat later (45 ms stagger), so expansion feels composed instead of clipped. |
+| **iOS-tuned springs (new default)** | A new **iOS** animation style — quick response with a gentle, confident settle, tuned after Apple's sheet springs — is now the default. Smooth/Default/Bouncy/Snappy are unchanged. |
+| **Track-change handoff** | When the song changes, the outgoing title drifts up and fades while the new one slides into its place (inspired by the community proposal devcode90#91). |
+| **Split/merge** | When a second island appears, the gap between the two breathes open instead of popping, and closes again when they merge. |
+| **Reduce motion** | New accessibility setting: no squash, no stagger, no overshoot, no track handoff — content and layout still update, just calmly. |
 
 ### 2.1.0
 
@@ -213,10 +225,11 @@ and on the [windhawk-mods issue tracker](https://github.com/ramensoftware/windha
       - '240': 240 FPS
       - '360': 360 FPS (Ultra Smooth)
       - '500': 500 FPS (Maximum / Uncapped)
-  - AnimationStyle: default
+  - AnimationStyle: ios
     $name: Animation bounciness / style
     $description: Control the spring physics and feel of the animation.
     $options:
+      - ios: iOS (v2B tuned — quick with a gentle settle, the default)
       - smooth: Smooth (No bounciness / Critically damped)
       - default: Default (Balanced Apple-like spring)
       - bouncy: Bouncy (Dynamic elastic spring)
@@ -231,8 +244,20 @@ and on the [windhawk-mods issue tracker](https://github.com/ramensoftware/windha
       - fast: Fast (1.35x)
       - very-fast: Very Fast (1.65x)
       - ultra-fast: Ultra Fast (2.0x)
+  - ReduceMotion: false
+    $name: Reduce motion
+    $description: Calms the island down - no squash on press, no staggered content fade, no overshoot, static glass sheen. Content and layout changes still happen, just without the animation. Recommended if motion bothers you.
   $name: Animations & Performance
 - Themes:
+  - SurfaceStyle: liquid-glass
+    $name: Surface style
+    $description: How the island's surface is painted. Liquid Glass (v2B default) makes the island translucent with a light-catching specular edge and sheen, in the spirit of Apple's glass materials. Flat keeps the original fully opaque matte look.
+    $options:
+      - liquid-glass: Liquid Glass (translucent, specular edge)
+      - flat: Flat (original opaque matte)
+  - GlassSpecular: 100
+    $name: Glass specular intensity
+    $description: 0 to 200. Brightness of the Liquid Glass edge lighting and top sheen. Only used by the Liquid Glass surface style.
   - ThemePreset: obsidian
     $name: Theme preset
     $description: Select a curated color theme, or choose Custom to use your own hex colors below.
@@ -832,6 +857,7 @@ enum class AnimationStyle {
     Default,
     Bouncy,
     Snappy,
+    Ios,  // v2B: quick response with a gentle settle, tuned after Apple's sheet springs
 };
 
 enum class CalendarAccentMode {
@@ -1030,6 +1056,9 @@ struct Settings {
     float accentBloom = 1.0f;       // 0..2 multiplier on the accent wash
     float textScale = 1.0f;         // independent typography scale (#41)
     BackdropMaterial backdropMaterial = BackdropMaterial::None;  // #59
+    bool liquidGlass = true;        // v2B 2.2: Liquid Glass surface style (default)
+    float glassSpecular = 1.0f;     // v2B 2.2: 0..2, edge lighting / sheen strength
+    bool reduceMotion = false;      // v2B 2.2: calm mode for all new motion
     float backdropTint = 0.55f;     // acrylic tint strength, 0..1
     float backdropFillAlpha = 0.45f;  // how opaque the pill's own fill stays
 
@@ -1312,6 +1341,8 @@ std::atomic<bool> g_running = false;
 std::atomic<int> g_idleTab = 0;
 std::atomic<bool> g_layoutDirty = true;
 std::atomic<bool> g_clickExpanded = false;
+// v2B 2.2: pointer is held down on the island — drives the press squash.
+std::atomic<bool> g_pointerDownOnIsland = false;
 std::atomic<int> g_pressedMediaButton = -1;
 std::atomic<int> g_hoveredMediaButton = -1;
 std::atomic<int> g_hoveredFileTrayRow = -1;  // row index under the cursor on the File Tray card
@@ -2146,9 +2177,12 @@ void LoadSettings() {
         next.animationStyle = AnimationStyle::Bouncy;
     } else if (EqualsNoCase(styleStr, L"snappy")) {
         next.animationStyle = AnimationStyle::Snappy;
-    } else {
+    } else if (EqualsNoCase(styleStr, L"default")) {
         next.animationStyle = AnimationStyle::Default;
+    } else {
+        next.animationStyle = AnimationStyle::Ios;
     }
+    next.reduceMotion = Wh_GetIntSetting(L"Animations.ReduceMotion") != 0;
 
     const std::wstring speed = GetStringSettingWithFallback(L"Animations.AnimationSpeed", L"Appearance.AnimationSpeed", L"Behavior.AnimationSpeed");
     if (EqualsNoCase(speed, L"very-slow")) {
@@ -2222,6 +2256,12 @@ void LoadSettings() {
         } else {
             next.backdropMaterial = BackdropMaterial::None;
         }
+
+        // v2B 2.2: surface style. Unknown/empty values keep the Liquid Glass
+        // default; "flat" restores the original opaque matte painting.
+        const std::wstring surface = GetStringSettingCopy(L"Themes.SurfaceStyle");
+        next.liquidGlass = !EqualsNoCase(surface, L"flat");
+        next.glassSpecular = Clamp(Wh_GetIntSetting(L"Themes.GlassSpecular") / 100.0f, 0.0f, 2.0f);
     }
     next.backdropTint = Clamp(Wh_GetIntSetting(L"Themes.BackdropTint") / 100.0f, 0.0f, 1.0f);
     next.backdropFillAlpha = Clamp(Wh_GetIntSetting(L"Themes.BackdropFillOpacity") / 100.0f, 0.0f, 1.0f);
@@ -6950,6 +6990,60 @@ class Renderer {
         EnsureBrushes(settings, state, now);
         settingsOpacity_ = settings.pillOpacity;
 
+        // ── v2B 2.2: iPhone-style motion state ──────────────────────────────
+        // All of it is event-driven state smoothing (no idle animation), so an
+        // untouched island still costs nothing.
+        const double renderDt = (lastRenderNow_ > 0.0 && now > lastRenderNow_)
+                                    ? std::min(0.1, now - lastRenderNow_)
+                                    : 0.016;
+        lastRenderNow_ = now;
+
+        // Squash & stretch: eases toward 1 while the pointer is held down on
+        // the pill, back to 0 on release. DrawPill turns that into a small
+        // volume-preserving squish.
+        const float pressTarget =
+            (!settings.reduceMotion && hover && g_pointerDownOnIsland.load()) ? 1.0f : 0.0f;
+        pressAmount_ += (pressTarget - pressAmount_) * std::min(1.0f, static_cast<float>(renderDt) * 25.0f);
+        if (pressTarget == 0.0f && pressAmount_ < 0.002f) {
+            pressAmount_ = 0.0f;
+        }
+
+        // Choreography: when the island grows, the content fades in shortly
+        // after the shape does (45 ms stagger), which is the detail that makes
+        // the expand feel composed rather than clipped.
+        float contentAlpha = 1.0f;
+        if (!settings.reduceMotion) {
+            if (choreoPrevW_ < 0.0f) {
+                choreoPrevW_ = width;
+                choreoPrevH_ = height;
+            }
+            // Rising edge only: while the spring is actively growing, every
+            // frame would otherwise re-arm the stagger and the content would
+            // never get its fade-in. A new expansion can re-arm once this
+            // transition window has closed.
+            const bool inChoreoWindow = (now - choreoChangeAt_) < 0.30;
+            if (!inChoreoWindow &&
+                (width > choreoPrevW_ + 2.0f || height > choreoPrevH_ + 2.0f)) {
+                choreoChangeAt_ = now;
+            }
+            choreoPrevW_ = width;
+            choreoPrevH_ = height;
+            const double elapsed = now - choreoChangeAt_;
+            if (elapsed >= 0.0 && elapsed < 0.30) {
+                const float t = Clamp(static_cast<float>((elapsed - 0.045) / 0.18), 0.0f, 1.0f);
+                contentAlpha = t * t * (3.0f - 2.0f * t);
+            }
+        }
+
+        // Split/merge: the gap between the two islands breathes open when a
+        // second island appears instead of popping to its final width.
+        const float gapTarget = secondary.has_value() ? 1.0f : 0.0f;
+        if (settings.reduceMotion) {
+            gapBlend_ = gapTarget;
+        } else {
+            gapBlend_ += (gapTarget - gapBlend_) * std::min(1.0f, static_cast<float>(renderDt) * 12.0f);
+        }
+
         const bool gameMetricsPresent = primary.kind == IslandKind::Idle &&
             (settings.gameOverlay || Wh_GetIntValue(L"GameOverlayPinned", 0) != 0);
         // v2B (issue devcode90#100): in click-to-expand mode hover used to give
@@ -6967,22 +7061,25 @@ class Renderer {
 
         if (width >= 2.0f && height >= 2.0f) {
             if (secondary) {
-                const float gap = 12.0f * settings.sizeScale;
+                // v2B 2.2: the gap animates 2 -> 12 px as the second island
+                // splits off, and closes again when it merges back.
+                const float gap = (2.0f + 10.0f * gapBlend_) * settings.sizeScale;
                 const float maxH = std::max(primary.height, secondary->height);
                 const float pTop = top + (maxH - primary.height) * 0.5f;
                 const float sTop = top + (maxH - secondary->height) * 0.5f;
 
                 DrawPill(state, settings, primary,
                          D2D1::RectF(left, pTop, left + primary.width, pTop + primary.height),
-                         scale, now);
+                         scale, now, pressAmount_, contentAlpha);
                 DrawPill(state, settings, *secondary,
                          D2D1::RectF(left + primary.width + gap, sTop,
                                       left + primary.width + gap + secondary->width,
                                       sTop + secondary->height),
-                         scale, now);
+                         scale, now, pressAmount_, contentAlpha);
             } else {
                 DrawPill(state, settings, primary,
-                         D2D1::RectF(left, top, left + width, top + height), scale, now);
+                         D2D1::RectF(left, top, left + width, top + height), scale, now,
+                         pressAmount_, contentAlpha);
             }
         }
 
@@ -7554,11 +7651,14 @@ class Renderer {
     }
 
     void DrawPill(const SharedState& state, const Settings& settings, const Activity& activity,
-                  D2D1_RECT_F rect, float scale, double now) {
+                  D2D1_RECT_F rect, float scale, double now, float press, float contentAlpha) {
         const float cx = (rect.left + rect.right) * 0.5f;
         const float cy = (rect.top + rect.bottom) * 0.5f;
-        const float w = (rect.right - rect.left) * scale;
-        const float h = (rect.bottom - rect.top) * scale;
+        // v2B 2.2 squash & stretch: pressing the island squishes it slightly —
+        // shorter AND a touch wider, so the "volume" reads as preserved, which
+        // is what makes a squish feel physical instead of like a glitch.
+        const float w = (rect.right - rect.left) * scale * (1.0f + 0.02f * press);
+        const float h = (rect.bottom - rect.top) * scale * (1.0f - 0.04f * press);
         rect = D2D1::RectF(cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f);
 
         float radius = settings.w11Style ? 8.0f * settings.sizeScale : (rect.bottom - rect.top) * 0.5f;
@@ -7596,6 +7696,19 @@ class Renderer {
         float unW = (rect.right - rect.left) * invScale;
         float unH = (rect.bottom - rect.top) * invScale;
         D2D1_RECT_F unscaledRect = D2D1::RectF(pillCenter.x - unW * 0.5f, pillCenter.y - unH * 0.5f, pillCenter.x + unW * 0.5f, pillCenter.y + unH * 0.5f);
+
+        // v2B 2.2 choreography: while the island is expanding, the surface
+        // leads and the content arrives a beat later (contentAlpha < 1). One
+        // opacity layer around the content switch is enough — the shape,
+        // shadow and glass were already drawn at full strength above.
+        ComPtr<ID2D1Layer> contentLayer;
+        if (contentAlpha < 0.999f && SUCCEEDED(target_->CreateLayer(&contentLayer)) && contentLayer) {
+            target_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr,
+                                                     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                     D2D1::IdentityMatrix(), contentAlpha,
+                                                     nullptr, D2D1_LAYER_OPTIONS_NONE),
+                               contentLayer.Get());
+        }
 
         switch (activity.kind) {
             case IslandKind::Media:
@@ -7635,6 +7748,10 @@ class Renderer {
             default:
                 DrawIdleDashboard(state, unscaledRect, settings, now);
                 break;
+        }
+
+        if (contentLayer) {
+            target_->PopLayer();
         }
 
         // ── Apple-style privacy indicator dots ───────────────────────────────
@@ -7929,6 +8046,87 @@ class Renderer {
     // Each layer is individually subtle; together they give the pill depth
     // instead of the flat single-fill look it had before. Deliberately absent:
     // any bright rim, hairline or sheen tracing the island's edge.
+    // v2B 2.2 — Liquid Glass surface treatment.
+    //
+    // Apple's glass materials read as glass because of three things: light
+    // catching the top edge (specular rim), a soft pool of light on the upper
+    // surface (sheen), and genuine translucency. The window is a per-pixel
+    // alpha layered window, so a translucent fill is REAL transparency to the
+    // desktop — no backdrop blur needed for the effect to land.
+    // Everything is driven by settings.glassSpecular so users can dim or kill
+    // the lighting, and nothing here animates on its own: the sheen is static
+    // so an idle island keeps costing zero CPU.
+    void DrawLiquidGlass(D2D1_RECT_F rect, float radius, const Settings& settings) {
+        const float spec = settings.glassSpecular * settingsOpacity_;
+        if (spec <= 0.01f) {
+            return;
+        }
+        const D2D1_COLOR_F white = D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f);
+
+        // 1. Specular rim — bright where the light comes from (top), fading
+        // toward the bottom. Drawn just inside the silhouette so it hugs the
+        // edge like a real glass bevel.
+        {
+            D2D1_GRADIENT_STOP stops[2] = {};
+            stops[0].position = 0.0f;
+            stops[0].color = WithAlpha(white, std::min(1.0f, 0.55f * spec));
+            stops[1].position = 1.0f;
+            stops[1].color = WithAlpha(white, std::min(1.0f, 0.08f * spec));
+
+            ComPtr<ID2D1GradientStopCollection> collection;
+            if (SUCCEEDED(target_->CreateGradientStopCollection(stops, 2, D2D1_GAMMA_2_2,
+                                                                D2D1_EXTEND_MODE_CLAMP, &collection)) &&
+                collection) {
+                ComPtr<ID2D1LinearGradientBrush> brush;
+                if (SUCCEEDED(target_->CreateLinearGradientBrush(
+                        D2D1::LinearGradientBrushProperties(D2D1::Point2F(rect.left, rect.top),
+                                                            D2D1::Point2F(rect.left, rect.bottom)),
+                        collection.Get(), &brush)) &&
+                    brush) {
+                    D2D1_RECT_F rimRect = D2D1::RectF(rect.left + 0.6f, rect.top + 0.6f,
+                                                       rect.right - 0.6f, rect.bottom - 0.6f);
+                    DrawIslandShape(rimRect, std::max(1.0f, radius - 0.6f), settings.w11Style,
+                                    settings.notchStyle, brush.Get(), 1.2f);
+                }
+            }
+        }
+
+        // 2. Top sheen — light pooling across the upper half, clipped to the
+        // island silhouette so it never bleeds past the glass.
+        {
+            ComPtr<ID2D1Geometry> mask = CreateIslandMaskGeometry(rect, radius, settings.notchStyle);
+            ComPtr<ID2D1Layer> layer;
+            if (mask && SUCCEEDED(target_->CreateLayer(&layer)) && layer) {
+                target_->PushLayer(D2D1::LayerParameters(rect, mask.Get(),
+                                                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE),
+                                   layer.Get());
+
+                D2D1_GRADIENT_STOP stops[3] = {};
+                stops[0].position = 0.0f;
+                stops[0].color = WithAlpha(white, std::min(1.0f, 0.16f * spec));
+                stops[1].position = 0.55f;
+                stops[1].color = WithAlpha(white, std::min(1.0f, 0.04f * spec));
+                stops[2].position = 1.0f;
+                stops[2].color = WithAlpha(white, 0.0f);
+
+                ComPtr<ID2D1GradientStopCollection> collection;
+                if (SUCCEEDED(target_->CreateGradientStopCollection(stops, 3, D2D1_GAMMA_2_2,
+                                                                    D2D1_EXTEND_MODE_CLAMP, &collection)) &&
+                    collection) {
+                    ComPtr<ID2D1LinearGradientBrush> brush;
+                    if (SUCCEEDED(target_->CreateLinearGradientBrush(
+                            D2D1::LinearGradientBrushProperties(D2D1::Point2F(rect.left, rect.top),
+                                                                D2D1::Point2F(rect.left, rect.bottom)),
+                            collection.Get(), &brush)) &&
+                        brush) {
+                        target_->FillRectangle(rect, brush.Get());
+                    }
+                }
+                target_->PopLayer();
+            }
+        }
+    }
+
     void DrawPillSurface(D2D1_RECT_F rect, float radius, IslandKind kind, const Settings& settings) {
         // The dark tint scrim exists to deepen an opaque background. With a real
         // backdrop enabled it would just mud up the blur, so it is skipped.
@@ -7946,21 +8144,37 @@ class Renderer {
             // DWM is blurring what is behind the window; an opaque fill would
             // hide it entirely, so cap the fill and let the backdrop through.
             bg.a = std::min(bg.a, settings.backdropFillAlpha);
+        } else if (settings.liquidGlass) {
+            // v2B 2.2: glass is translucent by definition. The layered window
+            // turns this alpha into real see-through to the desktop, so the
+            // pill reads as tinted glass even without a backdrop material.
+            bg.a = std::min(bg.a, 0.82f * settingsOpacity_);
         }
         target_->CreateSolidColorBrush(bg, &blackBrush);
         if (blackBrush) {
             FillIslandShape(rect, radius, settings.w11Style, settings.notchStyle, blackBrush.Get());
         }
 
+        if (settings.liquidGlass) {
+            DrawLiquidGlass(rect, radius, settings);
+        }
+
         if (settings.materialDepth) {
-            FillSurfaceDepth(rect, radius, kind == IslandKind::Media || kind == IslandKind::Idle);
+            // Glass replaces the flat depth shading — stacking a matte
+            // downward gradient on top of the specular surface would mud it
+            // up. The accent bloom stays (a touch softer) so the surface is
+            // still tinted by whatever is playing.
+            if (!settings.liquidGlass) {
+                FillSurfaceDepth(rect, radius, kind == IslandKind::Media || kind == IslandKind::Idle);
+            }
 
             // Media leans on the album-art accent; other surfaces get a whisper
             // of it so the whole UI still feels connected to what is playing.
             const float bloom = (kind == IslandKind::Media) ? 0.115f
                                 : (kind == IslandKind::Idle) ? 0.055f
                                                              : 0.075f;
-            FillAccentBloom(rect, radius, bloom * settings.accentBloom);
+            FillAccentBloom(rect, radius, bloom * settings.accentBloom *
+                                            (settings.liquidGlass ? 0.75f : 1.0f));
         }
 
         if (settings.contourBorderMode != ContourBorderMode::Borderless && settings.contourBorderEnabled) {
@@ -9591,6 +9805,16 @@ class Renderer {
                    double now) {
         const float height = rect.bottom - rect.top;
 
+        // v2B 2.2: spot track changes so the old title can be animated out.
+        // Player pauses or empty states don't count as a handoff.
+        if (state.media.title != lastMediaTitle_) {
+            if (!lastMediaTitle_.empty() && !state.media.title.empty()) {
+                ghostMediaTitle_ = lastMediaTitle_;
+                mediaGhostStart_ = now;
+            }
+            lastMediaTitle_ = state.media.title;
+        }
+
         PublishContentGeometry(rect);
 
         const float radius = ContentIslandRadius(height);
@@ -9640,9 +9864,35 @@ class Renderer {
                 const float textRight = waveRect.left - 16.0f;
 
                 // Title — bold, prominent.
+                // v2B 2.2 track handoff: for ~280 ms after a track change the
+                // outgoing title drifts up and fades while the new one slides
+                // up into its place. Reduce motion falls back to the plain swap.
                 D2D1_RECT_F titleRect = D2D1::RectF(textLeft, rect.top + 34.0f, textRight, rect.top + 54.0f);
-                DrawMarqueeText(state.media.title.empty() ? std::wstring(Loc(L"Unknown")) : state.media.title,
-                                titleRect, textFormat_.Get(), textBrush_.Get(), now, 42.0f, marqueeTitleCache_);
+                const double trackT = (now - mediaGhostStart_) / 0.28;
+                const bool ghosting = !settings.reduceMotion && !ghostMediaTitle_.empty() &&
+                                      trackT >= 0.0 && trackT < 1.0;
+                if (ghosting) {
+                    const float t = static_cast<float>(trackT);
+                    const float ease = t * t * (3.0f - 2.0f * t);
+
+                    D2D1_RECT_F ghostRect = D2D1::RectF(titleRect.left, titleRect.top - 7.0f * ease,
+                                                        titleRect.right, titleRect.bottom - 7.0f * ease);
+                    textBrush_->SetOpacity(0.95f * (1.0f - ease));
+                    target_->DrawTextW(ghostMediaTitle_.c_str(),
+                                       static_cast<UINT32>(ghostMediaTitle_.size()),
+                                       textFormat_.Get(), ghostRect, textBrush_.Get(),
+                                       D2D1_DRAW_TEXT_OPTIONS_CLIP);
+
+                    D2D1_RECT_F incomingRect = D2D1::RectF(titleRect.left, titleRect.top + 8.0f * (1.0f - ease),
+                                                           titleRect.right, titleRect.bottom + 8.0f * (1.0f - ease));
+                    textBrush_->SetOpacity(ease);
+                    DrawMarqueeText(state.media.title.empty() ? std::wstring(Loc(L"Unknown")) : state.media.title,
+                                    incomingRect, textFormat_.Get(), textBrush_.Get(), now, 42.0f, marqueeTitleCache_);
+                    textBrush_->SetOpacity(1.0f);
+                } else {
+                    DrawMarqueeText(state.media.title.empty() ? std::wstring(Loc(L"Unknown")) : state.media.title,
+                                    titleRect, textFormat_.Get(), textBrush_.Get(), now, 42.0f, marqueeTitleCache_);
+                }
 
                 // Artist — muted below title.
                 D2D1_RECT_F artistRect = D2D1::RectF(textLeft, rect.top + 54.0f, textRight, rect.top + 74.0f);
@@ -11062,6 +11312,20 @@ class Renderer {
     ComPtr<ID2D1Bitmap> fileTrayIconBitmap_;
     uint64_t fileTrayIconGeneration_ = 0;
     float settingsOpacity_ = 0.96f;
+
+    // v2B 2.2 motion state: press squash, expand choreography, split/merge.
+    float pressAmount_ = 0.0f;
+    double lastRenderNow_ = 0.0;
+    double choreoChangeAt_ = -10.0;
+    float choreoPrevW_ = -1.0f;
+    float choreoPrevH_ = -1.0f;
+    float gapBlend_ = 0.0f;
+
+    // v2B 2.2 track-change handoff: the outgoing title ghosts away while the
+    // incoming one slides into its place (devcode90#91, simplified).
+    std::wstring lastMediaTitle_;
+    std::wstring ghostMediaTitle_;
+    double mediaGhostStart_ = -10.0;
     D2D1_COLOR_F pillBgColor_ = D2D1::ColorF(0.031f, 0.031f, 0.039f, 1.0f);
     // Design tokens for the current frame, rebuilt by EnsureBrushes.
     MaterialTokens material_{};
@@ -11639,6 +11903,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_LBUTTONDOWN:
             {
+                // v2B 2.2: press feedback starts on pointer-down, not on
+                // release — Apple's first rule of responsiveness.
+                g_pointerDownOnIsland = true;
+
                 int xPos = GET_X_LPARAM(lParam);
                 int yPos = GET_Y_LPARAM(lParam);
 
@@ -11766,6 +12034,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_LBUTTONUP:
             {
+                g_pointerDownOnIsland = false;
                 if (g_scrubbing.load()) {
                     g_scrubbing = false;
                     ReleaseCapture();
@@ -12584,7 +12853,12 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         float styleStiffnessMult = 1.0f;
         float styleDampingMult = 1.0f;
-        if (g_settings.animationStyle == AnimationStyle::Smooth) {
+        if (g_settings.reduceMotion) {
+            // v2B 2.2: reduced motion means no overshoot and a calm settle,
+            // whatever style is selected — the critically damped Smooth curve.
+            styleStiffnessMult = 1.0f;
+            styleDampingMult = 1.35f;
+        } else if (g_settings.animationStyle == AnimationStyle::Smooth) {
             styleStiffnessMult = 1.0f;
             styleDampingMult = 1.35f; // Critically damped, no bounciness
         } else if (g_settings.animationStyle == AnimationStyle::Bouncy) {
@@ -12593,6 +12867,12 @@ DWORD WINAPI RenderThreadProc(void*) {
         } else if (g_settings.animationStyle == AnimationStyle::Snappy) {
             styleStiffnessMult = 1.5f;
             styleDampingMult = 1.25f; // High stiffness and quick settle
+        } else if (g_settings.animationStyle == AnimationStyle::Ios) {
+            // v2B 2.2 default — tuned after Apple's sheet/drawer springs:
+            // quick response with a small, confident overshoot
+            // (damping ratio ~0.8 at the expand stiffness).
+            styleStiffnessMult = 1.14f;
+            styleDampingMult = 1.19f;
         }
 
         const float speed = g_settings.animationSpeed;
