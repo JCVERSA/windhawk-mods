@@ -1020,7 +1020,7 @@ void DrawThemeIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, float
             sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx, cy + r - 0.06f * s),
                                           D2D1::SizeF(r - 0.06f * s, r - 0.06f * s), 0.0f,
                                           D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
-                                          D2D1_ARC_SIZE_SEMI));
+                                          D2D1_ARC_SIZE_LARGE));
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
             sink->Release();
