@@ -812,6 +812,12 @@ bool IsForegroundFullscreen(HMONITOR mon) {
     if (!fg || fg == GetShellWindow() || fg == GetDesktopWindow()) {
         return false;
     }
+    // A merely MAXIMIZED window (Firefox, Explorer...) also covers the whole
+    // monitor but keeps its caption; real fullscreen apps are caption-less.
+    const LONG_PTR style = GetWindowLongPtrW(fg, GWL_STYLE);
+    if (style & WS_CAPTION) {
+        return false;
+    }
     MONITORINFO mi = {sizeof(MONITORINFO)};
     if (!GetMonitorInfoW(mon, &mi)) {
         return false;
@@ -1274,6 +1280,8 @@ DWORD WINAPI OverlayThreadProc(void*) {
         ui.volVis = volRead;
         ui.muted = muteRead;
     }
+    Wh_Log(L"QuickControls: overlay thread started (audio=%d brightness=%d).",
+           ui.volAvailable ? 1 : 0, ui.briAvailable ? 1 : 0);
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -1330,8 +1338,11 @@ DWORD WINAPI OverlayThreadProc(void*) {
         }
         if (RegisterHotKey(hwnd, kHotkeyId, parsed.mods, parsed.vk)) {
             hotkeyRegistered = true;
+            Wh_Log(L"QuickControls: hotkey registered (mods=0x%X vk=0x%X).", parsed.mods,
+                   parsed.vk);
         } else {
-            Wh_Log(L"QuickControls: RegisterHotKey failed (already taken?).");
+            Wh_Log(L"QuickControls: RegisterHotKey failed (mods=0x%X vk=0x%X, already taken?).",
+                   parsed.mods, parsed.vk);
         }
     };
     registerHotkey();
