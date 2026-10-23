@@ -1,0 +1,85 @@
+name: Infrastructure validation
+
+# Validates the repository tooling itself (deploy generator, PR validation,
+# symbol extraction, PR flow bot). Mod PRs are covered by pr_validation.yml
+# and mod_compatibility_check.yml instead; keep the path list in sync with
+# the tooling files.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'deploy.ts'
+      - 'modSourceUtils.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.python-version'
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy.ts'
+      - 'modSourceUtils.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.python-version'
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    name: Python tooling tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -r .github/requirements.txt
+          python -m pip install -r .github/requirements-validation.txt
+
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+
+  node:
+    runs-on: ubuntu-latest
+    name: TypeScript type check and PR flow tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        # Type checking and the PR flow tests execute no installed code,
+        # so dependency install scripts don't need to run.
+        run: npm ci --ignore-scripts
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run PR flow tests
+        run: npm run test:pr-flow

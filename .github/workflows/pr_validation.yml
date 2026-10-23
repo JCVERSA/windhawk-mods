@@ -28,10 +28,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
+          python-version: '3.12'
 
       - name: Install Python dependencies
-        run: python -m pip install pyyaml
+        run: python -m pip install -r .github/requirements-validation.txt
 
       # The event payload carries the labels from the moment the event fired,
       # so a re-run would still see the old ones. Reading them here is what

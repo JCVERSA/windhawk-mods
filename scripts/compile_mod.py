@@ -624,7 +624,14 @@ def compile_mod(
             print(f'Using compatibility patches: {compatibility_patches}')
             mod_code = mod_file.read_text(encoding='utf-8')
             for search, replace in compatibility_patches:
-                mod_code = re.sub(search, replace, mod_code, flags=re.MULTILINE)
+                mod_code, substitutions = re.subn(
+                    search, replace, mod_code, flags=re.MULTILINE
+                )
+                if substitutions == 0:
+                    raise RuntimeError(
+                        'Compatibility patch did not match anything: '
+                        f'{search}'
+                    )
 
             with tempfile.NamedTemporaryFile(delete=False, suffix='.wh.cpp') as tmp:
                 mod_file_temp = Path(tmp.name)

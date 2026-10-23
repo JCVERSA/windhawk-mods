@@ -1,10 +1,15 @@
 {
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:pr-flow": "node --test tests/pr_flow.test.cjs"
+  },
   "devDependencies": {
     "@actions/github-script": "github:actions/github-script#v9.0.0",
     "@octokit/webhooks-types": "^7.6.1",
     "@types/node": "^26.1.2",
-    "@types/showdown": "^2.0.6"
+    "@types/showdown": "^2.0.6",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "feed": "^6.0.0",

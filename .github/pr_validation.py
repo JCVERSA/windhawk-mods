@@ -229,6 +229,7 @@ def get_mod_file_metadata(
 
 
 FETCH_ATTEMPTS = 3
+FETCH_TIMEOUT_SECONDS = 30
 
 
 class FetchError(Exception):
@@ -243,7 +244,9 @@ def fetch_url(url: str, headers: Optional[dict[str, str]] = None) -> bytes:
     last_error: Optional[Exception] = None
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(
+                request, timeout=FETCH_TIMEOUT_SECONDS
+            ) as response:
                 return response.read()
         except urllib.error.HTTPError as e:
             if e.code < 500:
@@ -1782,6 +1785,30 @@ def validate_callback_signatures(path: Path, mod_source: str):
     return warnings
 
 
+DOWNLOAD_API_PATTERN = r'\b(?:URLDownloadToFile\w*|WinHttpOpen\w*|InternetOpen\w*|InternetReadFile|WinHttpSendRequest\w*)\b'
+EXECUTE_API_PATTERN = r'\b(?:CreateProcess\w*|ShellExecute\w*|WinExec)\b'
+
+
+def validate_download_and_execute(path: Path, mod_source: str):
+    """Flag the combination of network download and process launching.
+
+    Each capability is common and legitimate on its own, but together they
+    are the download-and-execute pattern, which deserves a human look
+    regardless of how benign the surrounding code appears.
+    """
+    download_match = re.search(DOWNLOAD_API_PATTERN, mod_source)
+    if not download_match or not re.search(EXECUTE_API_PATTERN, mod_source):
+        return 0
+
+    line_num = 1 + mod_source[: download_match.start()].count('\n')
+    return add_warning(
+        path,
+        line_num,
+        'Mod combines network download and process launching APIs, '
+        'manual inspection is required (download-and-execute pattern)',
+    )
+
+
 def validate_mod_file(path: Path, pr_author: str, pr_author_id: Optional[int]) -> int:
     mod_source = path.read_text(encoding='utf-8', errors='ignore').removeprefix(
         '\ufeff'
@@ -1793,6 +1820,7 @@ def validate_mod_file(path: Path, pr_author: str, pr_author_id: Optional[int]) -
     warnings += validate_settings(path, mod_source)
     warnings += validate_symbol_hooks(path, mod_source)
     warnings += validate_specific_keywords(path, mod_source)
+    warnings += validate_download_and_execute(path, mod_source)
     warnings += validate_callback_signatures(path, mod_source)
 
     return warnings
