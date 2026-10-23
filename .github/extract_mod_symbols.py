@@ -519,7 +519,13 @@ def get_mod_symbols(path: Path, patches: list[tuple[str, str]]):
     mod_source = path.read_text(encoding='utf-8')
 
     for patch in patches:
-        mod_source = re.sub(patch[0], patch[1], mod_source, flags=re.MULTILINE)
+        mod_source, substitutions = re.subn(
+            patch[0], patch[1], mod_source, flags=re.MULTILINE
+        )
+        if substitutions == 0:
+            raise Exception(
+                f'Compatibility patch did not match anything: {patch[0]}'
+            )
 
     metadata = get_mod_metadata(mod_source)
 

@@ -118,22 +118,31 @@ class HttpError extends Error {
 }
 
 // Inspired by https://gist.github.com/ktheory/df3440b01d4b9d3197180d5254d7fb65
+const FETCH_TIMEOUT_MS = 30_000;
+
 async function fetchJson(url: string, headers?: OutgoingHttpHeaders) {
     return new Promise<any>((resolve, reject) => {
         const req = https.request(url,
-            { headers: { 'User-Agent': 'nodejs', ...headers } },
+            { headers: { 'User-Agent': 'nodejs', ...headers }, timeout: FETCH_TIMEOUT_MS },
             (res) => {
                 let body = '';
                 res.on('data', (chunk) => (body += chunk.toString()));
                 res.on('error', reject);
                 res.on('end', () => {
                     if (res.statusCode && res.statusCode >= 200 && res.statusCode <= 299) {
-                        resolve(JSON.parse(body));
+                        try {
+                            resolve(JSON.parse(body));
+                        } catch {
+                            reject(new Error(`Failed to parse JSON response from ${url}`));
+                        }
                     } else {
                         reject(new HttpError(res.statusCode, body));
                     }
                 });
             });
+        req.on('timeout', () => {
+            req.destroy(new Error(`Request timed out after ${FETCH_TIMEOUT_MS}ms: ${url}`));
+        });
         req.on('error', reject);
         req.end();
     });
@@ -1003,7 +1012,7 @@ function generateRssFeed(feedType: 'updates' | 'releases', cache: GitCache) {
         link: 'https://windhawk.net/',
         favicon: 'https://windhawk.net/favicon.ico',
         copyright: 'Ramen Software',
-        updated: feedItems[0].date,
+        updated: feedItems[0]?.date ?? new Date(),
     });
 
     const showdownConverter = new showdown.Converter();
@@ -1046,4 +1055,7 @@ async function main() {
     }
 }
 
-main();
+main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+});

@@ -50,8 +50,9 @@ class FunctionLikeMacro:
 
 
 # A macro is either an object-like definition string, a function-like macro or
-# one of the states above.
-type Macros = dict[str, str | FunctionLikeMacro | MacroState]
+# one of the states above. Written as a plain alias (not a PEP 695 `type`
+# statement) so the validator also runs on Python 3.11.
+Macros = dict[str, str | FunctionLikeMacro | MacroState]
 
 
 _RAW_STRING_PREFIX_PATTERN = re.compile(r'(?:u8|u|U|L)?R"([^()\\ \t\n]{0,16})\(')

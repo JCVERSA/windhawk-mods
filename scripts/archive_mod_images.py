@@ -24,6 +24,11 @@ FETCH_URL_WORKAROUNDS = {
     # "https://raw.githubusercontent.com/QCQ171-C/mods-collection/refs/heads/main/Gallery/folder-thumbnail-tweaker/10-11.png": "https://raw.githubusercontent.com/QCQ171-C/mods-collection/refs/heads/main/Gallery/folder-thumbnail-tweaker/10-11.PNG",
 }
 
+DOWNLOAD_TIMEOUT_SECONDS = 30
+# Generous cap for README screenshots; prevents an unbounded download from
+# filling the runner disk if a server misbehaves.
+MAX_IMAGE_BYTES = 50 * 1024 * 1024
+
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0"})
 
@@ -60,14 +65,22 @@ def image_url_to_path(url: str):
 
 def download_image(url: str, save_path: Path):
     url = FETCH_URL_WORKAROUNDS.get(url, url)
-    response = session.get(url, stream=True)
-    response.raise_for_status()
+    with session.get(
+        url, stream=True, timeout=DOWNLOAD_TIMEOUT_SECONDS
+    ) as response:
+        response.raise_for_status()
 
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    with save_path.open("wb") as file:
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                file.write(chunk)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        downloaded = 0
+        with save_path.open("wb") as file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    downloaded += len(chunk)
+                    if downloaded > MAX_IMAGE_BYTES:
+                        raise RuntimeError(
+                            f"Image exceeds {MAX_IMAGE_BYTES} bytes: {url}"
+                        )
+                    file.write(chunk)
 
     print(f"Downloaded and saved: {save_path.name}")
 
